@@ -1,0 +1,76 @@
+apply plugin: 'java'
+apply plugin: 'idea'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compile 'org.jooq:jooq:3.5.0'
+    compile 'org.flywaydb:flyway-core:3.1'
+    runtime 'org.xerial:sqlite-jdbc:3.8.7'
+}
+
+buildscript {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'org.jooq:jooq-codegen:3.5.0'
+        classpath 'org.xerial:sqlite-jdbc:3.8.7'
+        classpath 'org.flywaydb:flyway-gradle-plugin:3.1'
+    }
+}
+
+apply plugin: 'flyway'
+
+flyway {
+    url = 'jdbc:sqlite:./tempdb.sqlite'
+}
+
+task codeGen << {
+    // Use your favourite XML builder to construct the code generation configuration file
+// ----------------------------------------------------------------------------------
+    def writer = new StringWriter()
+    def xml = new groovy.xml.MarkupBuilder(writer)
+            .configuration('xmlns': 'http://www.jooq.org/xsd/jooq-codegen-3.5.0.xsd') {
+        jdbc() {
+            driver('org.sqlite.JDBC')
+            url('jdbc:sqlite:./tempdb.sqlite')
+        }
+        generator() {
+            database() {
+            }
+            generate() {
+            }
+            target() {
+                packageName('test.database')
+                directory('src/main/java')
+            }
+        }
+    }
+    org.jooq.util.GenerationTool.main(
+            javax.xml.bind.JAXB.unmarshal(new StringReader(writer.toString()),
+                    org.jooq.util.jaxb.Configuration.class)
+    )
+}
+
+task deleteTempDb(type: Delete) {
+    delete 'tempdb.sqlite'
+}
+
+codeGen.dependsOn tasks.flywayMigrate
+codeGen.finalizedBy deleteTempDb
+tasks.idea.dependsOn codeGen
+compileJava.dependsOn codeGen
+
+//A hack to allow for flyway not to end up in an endless dependency loop.
+//The issue was that flyway depended on some compileJava to support some parts of it's java api.
+//Which is all well and good, until you realise that codeGen needs to run before compileJava but *after* flywayMigrate.
+//Since we're not using it for much outside of generating database files...
+project.afterEvaluate {
+    flywayClean.dependsOn -= testClasses
+    flywayMigrate.dependsOn = [processResources, processTestResources]
+}
